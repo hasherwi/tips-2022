@@ -1,0 +1,481 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Root Stack of Nested Stacks for Demo
+#This stack is only supported in to the Global Commercial partition (aws) due to the usage of CloudFront.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Configure these in the console."
+        Parameters:
+          - originBucket
+          - originKey
+      - Label:
+          default: "Do not configure these in the console, use the JSON file."
+        Parameters:
+          - initialDeploymentBoolean
+          - cidrBlock
+          - emailAddress
+          - ownedDomainName
+          - ownedHostedZoneId
+    ParameterLabels:
+      originBucket:
+        default: "What is the name of the bucket that you stored the ZIP archive in?"
+      originKey:
+        default: "What is the name of the object key for that ZIP archive?"
+      initialDeploymentBoolean:
+        default: "initialDeploymentBoolean. Don't change me here. Use the JSON file."
+      cidrBlock:
+        default: "cidrBlock. Don't change me here. Use the JSON file."
+      emailAddress:
+        default: "emailAddress. Don't change me here. Use the JSON file."
+      ownedDomainName:
+        default: "ownedDomainName. Don't change me here. Use the JSON file."
+      ownedHostedZoneId:
+        default: "ownedHostedZoneId. Don't change me here. Use the JSON file."
+Parameters:
+  originBucket:
+    Type: String
+    Description: The bucket where you stored the ZIP archive.
+    AllowedPattern: '[a-z0-9.-]{3,63}' #This is not a definite pattern for bucket names. See docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+  originKey:
+    Type: String
+    Default: demo-repo.zip
+    Description: The object key of the ZIP archive.
+    AllowedPattern: '\S{1,1020}.zip'
+  initialDeploymentBoolean:
+    Type: String
+    Default: true
+    Description: true will not call dependent stacks, false will
+    AllowedPattern: true|false
+  cidrBlock:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: It will be divided into subnets.
+    ConstraintDescription: Minimum size is /24 (supports up to 16 subnets). Maximum size is /16.
+    #This enforces that IPv4 patterns are used and that they use /16 to /24 ranges.
+    AllowedPattern: '((\d{1,3})\.){3}\d{1,3}/(1[6-9]|2[0-4])'
+  emailAddress:
+    Type: String
+    Description: Optional. The email address to send notifications.
+    ConstraintDescription: An email address.
+    AllowedPattern: '([a-z0-9.!#$%&*+=?^_`|\-]{1,64}[@][a-z]{2,63}[.][a-z]{2,63}([.][a-z]{2,63})?)|()'
+  ownedDomainName:
+    Type: String
+    Description: A domain name that you own. Do not end with a trailing dot.
+    MaxLength: 255
+    AllowedPattern: '([a-z]{2,63}[.][a-z]{2,63}([.][a-z]{2,63})?)|()'
+  ownedHostedZoneId:
+    Type: String
+    Description: The Route 53 hosted zone ID for the above domain. Example - Z0687820MAF0GNYEQVR8.
+    AllowedPattern: '([A-Z0-9]{5,40})|()'
+Conditions:
+  NotInitialDeployment: !Equals [ !Ref initialDeploymentBoolean, "false" ]
+  DomainSupplied: !And [ !Not [ !Equals [ !Ref ownedDomainName, "" ] ], !Not [ !Equals [ !Ref ownedHostedZoneId, "" ] ] ]
+  EmailProvided: !Not [ !Equals [ !Ref emailAddress, "" ] ]
+  MakeCertStack: !And [ !Condition DomainSupplied, !Condition NotInitialDeployment ]
+Mappings:
+  PartitionMap:
+    aws:
+      SSLcertRegion: us-east-1 #CloudFront requires this to be the region for certs that it uses.
+  RegionMap:
+    af-south-1:     #Cape Town, TODO: Untested opt-in region
+      Cloud9InstanceType: t3.medium
+    ap-east-1:      #Hong Kong, TODO: Untested opt-in region
+      Cloud9InstanceType: t3.medium
+    ap-northeast-1: #Tokyo
+      Cloud9InstanceType: t3.medium
+    ap-northeast-2: #Seoul
+      Cloud9InstanceType: t3.medium
+    ap-northeast-3: #Osaka
+      Cloud9InstanceType: t3.medium
+    ap-south-1:     #Mumbai
+      Cloud9InstanceType: t3.medium
+    ap-southeast-1: #Singapore
+      Cloud9InstanceType: t3.medium
+    ap-southeast-2: #Sydney
+      Cloud9InstanceType: t3.medium
+    ap-southeast-3: #Jakarta, TODO: Untested opt-in region
+      Cloud9InstanceType: t3.medium
+    ca-central-1:   #Canada (Central)
+      Cloud9InstanceType: t3.medium
+    eu-central-1:   #Frankfurt
+      Cloud9InstanceType: t3.medium
+    eu-north-1:      #Stockholm
+      Cloud9InstanceType: t3.medium
+    eu-south-1:      #Milan, TODO: Untested opt-in region
+      Cloud9InstanceType: t3.medium
+    eu-west-1:      #Ireland
+      Cloud9InstanceType: t3.medium
+    eu-west-2:      #London
+      Cloud9InstanceType: t3.medium
+    eu-west-3:      #Paris
+      Cloud9InstanceType: t3.medium
+    me-south-1:      #Bahrain, TODO: Untested opt-in region
+      Cloud9InstanceType: t3.medium
+    sa-east-1:      #São Paulo
+      Cloud9InstanceType: t3.medium
+    us-east-1:      #N. Virginia
+      Cloud9InstanceType: t3.medium
+    us-east-2:      #Ohio
+      Cloud9InstanceType: t3.medium
+    us-west-1:      #N. California
+      Cloud9InstanceType: t3.medium
+    us-west-2:      #Oregon
+      Cloud9InstanceType: t3.medium
+Resources:
+  repository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Sub ${AWS::StackName}-repo
+      Code:
+        BranchName: main
+        S3:
+          Bucket: !Ref originBucket
+          Key: !Ref originKey
+  pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore: 
+        Type: S3 
+        Location: !Ref bucket
+      Name: !Sub ${AWS::StackName}-Pipeline
+      RoleArn: !GetAtt pipelineRole.Arn
+      Stages:
+        - Name: CodeCommit
+          Actions:
+            - Name: Commit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: '1'
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                BranchName: main
+                PollForSourceChanges: 'true'
+                RepositoryName: !GetAtt repository.Name
+        - Name: DeployToS3
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                BucketName: !Ref bucket
+                Extract: 'true'                
+        - Name: UpdateCFN
+          Actions:
+            - Name: UpdateStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref AWS::StackName
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt cfnRole.Arn
+                TemplatePath: SourceOutput::demo-main.yaml
+                TemplateConfiguration: SourceOutput::demo-configuration.json
+        - Name: PackagetoS3
+          Actions:
+            - Name: PackageAssets
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                BucketName: !Ref bucket
+                Extract: 'false'
+                ObjectKey: demo-repo.zip
+  pipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: codepipelinerolepolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cloudformation:DescribeStacks'
+                  - 'cloudformation:UpdateStack'
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/*/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/{AWS::StackId}
+              - Effect: Allow
+                Action: 
+                  - 'codecommit:GetBranch'
+                  - 'codecommit:GetCommit'
+                  - 'codecommit:UploadArchive'
+                  - 'codecommit:GetUploadArchiveStatus'
+                Resource: !GetAtt repository.Arn
+              - Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                Resource:
+                  - !Sub
+                    - '${Bucket}/*'
+                    - Bucket: !GetAtt bucket.Arn
+              - Effect: Allow
+                Action: 'iam:PassRole'
+                Resource: !GetAtt cfnRole.Arn
+              - Effect: Allow
+                Action: 'sns:Publish'
+                Resource: !Ref snsTopic
+  bucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join
+      #This should generate a fairly random bucket name.
+        - "-"
+        - - "demo-outputs"
+          - !Ref "AWS::AccountId"
+          - !Select
+            - 0
+            - !Split
+              - "-"
+              - !Select
+                - 2
+                - !Split
+                  - "/"
+                  - !Ref "AWS::StackId"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NewerNoncurrentVersions: 10
+              NoncurrentDays: 30
+  cfnRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies: #TODO: Tighten this up later.
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: '*'
+                Resource: '*'
+  #cfnStackSetAdminRole: #TODO: This is commented out until I can write a custom resource to retrieve the outputs from the created StackSet. #TODO: Need a path if these already exist.
+    #Type: AWS::IAM::Role
+    #Properties:
+    #  RoleName: AWSCloudFormationStackSetAdministrationRole
+    #  AssumeRolePolicyDocument:
+    #    Version: "2012-10-17"
+    #    Statement:
+    #      - Effect: Allow
+    #        Principal:
+    #          Service:
+    #            - cloudformation.amazonaws.com
+    #        Action:
+    #          - 'sts:AssumeRole'
+    #  Policies:
+    #    - PolicyName: root
+    #      PolicyDocument:
+    #        Version: "2012-10-17"
+    #        Statement:
+    #          - Effect: Allow
+    #            Action:
+    #              - 'sts:AssumeRole'
+    #            Resource:
+    #              - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/AWSCloudFormationStackSetExecutionRole'
+  #cfnStackSetExecRole: #TODO: This is commented out until I can write a custom resource to retrieve the outputs from the created StackSet. #TODO: Tighten this up later. Need a path if these already exist.
+    #Type: AWS::IAM::Role
+    #Properties:
+    #  RoleName: AWSCloudFormationStackSetExecutionRole
+    #  AssumeRolePolicyDocument:
+    #    Version: "2012-10-17"
+    #    Statement:
+    #      - Effect: Allow
+    #        Principal:
+    #          AWS: !Sub
+    #            - 'arn:aws:iam::${AWS::AccountId}:role/${AdminRoleName}'
+    #            - AdminRoleName: !Ref cfnStackSetAdminRole
+    #        Action:
+    #          - 'sts:AssumeRole'
+    #  Policies:
+    #    - PolicyName: root
+    #      PolicyDocument:
+    #        Version: "2012-10-17"
+    #        Statement:
+    #          - Effect: Allow
+    #            Action: '*'
+    #            Resource: '*'
+  snsTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: !Sub ${AWS::StackName}-Topic
+      TopicName: !Sub ${AWS::StackName}-Topic
+  snsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties: 
+      PolicyDocument:
+        Version: '2008-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - codestar-notifications.amazonaws.com
+          Action: SNS:Publish
+          Resource: !Ref snsTopic
+          Condition:
+            StringEquals:
+              "aws:SourceAccount": !Ref AWS::AccountId
+      Topics: 
+        - !Ref snsTopic
+  snsEmailSub:
+    Condition: EmailProvided
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref snsTopic
+      Protocol: "email"
+      Endpoint: !Ref emailAddress
+  networkingStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: NotInitialDeployment
+    Properties:
+      TemplateURL: !Join
+        - "/"
+        - - "https:/"
+          - !GetAtt bucket.DomainName
+          - "templates/demo-networking.yaml"
+      Parameters:
+        cidrBlock: !Ref cidrBlock
+  SSLcertStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: MakeCertStack
+    Properties:
+      TemplateURL: !Join
+        - "/"
+        - - "https:/"
+          - !GetAtt bucket.DomainName
+          - "templates/demo-certs.yaml"
+      Parameters:
+        ownedDomainName: !Ref ownedDomainName
+        ownedHostedZoneId: !Ref ownedHostedZoneId
+  #SSLcertStackSet: #TODO: This is commented out until I can write a custom resource to retrieve the outputs from the created StackSet.
+    #Type: AWS::CloudFormation::StackSet
+    #Condition: DomainSupplied
+    #Properties:
+    #  AdministrationRoleARN: !GetAtt cfnStackSetAdminRole.Arn
+    #  ExecutionRoleName: !Ref cfnStackSetExecRole
+    #  PermissionModel: SELF_MANAGED
+    #  StackSetName: !Sub ${AWS::StackName}-StackSet
+    #  TemplateURL: !Join
+    #    - "/"
+    #    - - "https:/"
+    #      - !GetAtt bucket.DomainName
+    #      - "templates/demo-certs.yaml"
+    #  Parameters:
+    #    - ParameterKey: ownedDomainName
+    #      ParameterValue: !Ref ownedDomainName
+    #    - ParameterKey: ownedHostedZoneId
+    #      ParameterValue: !Ref ownedHostedZoneId
+    #  StackInstancesGroup:
+    #    - DeploymentTargets:
+    #        Accounts:
+    #          - !Ref AWS::AccountId
+    #      Regions:
+    #        - !FindInMap [PartitionMap, !Ref "AWS::Partition", SSLcertRegion]
+  notesWebsiteStack:
+    Condition: NotInitialDeployment
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Join
+        - "/"
+        - - "https:/"
+          - !GetAtt bucket.DomainName
+          - "templates/demo-notes-site.yaml"
+      Parameters:
+        bucketName: !Ref bucket
+        bucketArn: !GetAtt bucket.Arn
+        bucketDomain: !GetAtt bucket.RegionalDomainName
+        wildCertificateArn: 
+          Fn::If:
+            - MakeCertStack
+            - !GetAtt SSLcertStack.Outputs.wildCertificateArn
+            - ""
+        ownedDomainName: !Ref ownedDomainName
+  cloud9Instance:
+    Type: AWS::Cloud9::EnvironmentEC2
+    Condition: NotInitialDeployment
+    Properties:
+      AutomaticStopTimeMinutes: 240
+      ConnectionType: CONNECT_SSH
+      Description: IDE Shell for Demos
+      ImageId: amazonlinux-2-x86_64
+      InstanceType: !FindInMap [RegionMap, !Ref "AWS::Region", Cloud9InstanceType]
+      SubnetId: !GetAtt networkingStack.Outputs.publicSubnetAid
+      Repositories:
+        - PathComponent: !GetAtt repository.Name
+          RepositoryUrl: !GetAtt repository.CloneUrlHttp
+Outputs:
+  cloud9ShareCommand: #TODO: Long-term replace this with custom resources.
+    Description: Run this command locally to share the Cloud9 environment with yourself, replacing USER_ARN. You can retrive the ARN by running 'aws sts get-caller-identity'.
+    Value:
+      Fn::If:
+        - NotInitialDeployment
+        - !Sub
+          - 'aws cloud9 create-environment-membership --environment-id ${EnviroId} --user-arn USER_ARN --permissions read-write'
+          - EnviroId: !Ref cloud9Instance
+        - "A Cloud9 instance has not been created yet."
+    
+    
+  codeCommitCloneUrlHttp:
+    Description: The HTTP Clone URL for the CodeCommit Repository
+    Value: !GetAtt repository.CloneUrlHttp
+  cloudfrontS3DistroDNS:
+    Description: CloudFront Distribution DNS Endpoint for S3 Origin
+    Value:
+      Fn::If:
+        - NotInitialDeployment
+        - !GetAtt notesWebsiteStack.Outputs.cloudfrontS3DistroDNS
+        - "A CloudFront distribution has not been created yet."
+  notesSiteURL:
+    Description: The URL for the Notes Site
+    Value:
+      Fn::If:
+        - NotInitialDeployment
+        - !GetAtt notesWebsiteStack.Outputs.siteURL
+        - "A notes website has not been created yet."
