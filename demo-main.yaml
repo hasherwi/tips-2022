@@ -41,7 +41,6 @@ Parameters:
     Type: String
     Default: demo-repo.zip
     Description: The object key of the ZIP archive.
-    AllowedPattern: '\S{1,1020}.zip'
   initialDeploymentBoolean:
     Type: String
     Default: true
